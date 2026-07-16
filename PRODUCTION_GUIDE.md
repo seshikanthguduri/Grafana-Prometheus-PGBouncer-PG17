@@ -333,7 +333,8 @@ docker compose run --entrypoint "" postgres_primary bash -c "rm -rf /var/lib/pos
 docker compose run --entrypoint "" postgres_primary bash -c "PGPASSWORD=replica_secure_password pg_basebackup -h pg_standby -D /var/lib/postgresql/data -U replicator -v -Fp -P -R -X stream"
 
 # Launch the container back into the cluster layout
-docker compose start postgres_primary```
+docker compose start postgres_primary
+```
 
 The cluster roles are now fully reversed, maintaining total data consistency over verified SSL network pipelines.
 ***
