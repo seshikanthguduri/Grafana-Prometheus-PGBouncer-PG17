@@ -1,0 +1,124 @@
+services:
+  postgres_primary:
+    image: postgres:17
+    container_name: pg_primary
+    environment:
+      POSTGRES_USER: db_user
+      POSTGRES_PASSWORD: your_secure_password
+      POSTGRES_DB: my_app_db
+    # Run with standard replica configurations allowed, but no synchronous blocking on initial boot
+    command: >
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=10
+    volumes:
+      - pg_primary_data:/var/lib/postgresql/data
+      - ./init-replication.sh:/docker-entrypoint-initdb.d/init-replication.sh:ro
+    networks:
+      - db_network
+    ports:
+      - "54320:5432"
+
+  postgres_standby:
+    image: postgres:17
+    container_name: pg_standby
+    environment:
+      PGPASSWORD: replica_secure_password
+    entrypoint: [ "/bin/bash", "-c" ]
+    command:
+      - |
+        echo "Checking primary node network availability..."
+        until gosu postgres pg_isready -h pg_primary -p 5432; do
+          echo "Primary is not ready yet. Retrying in 2 seconds..."
+          sleep 2
+        done
+
+        if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+          echo 'Cloning Primary Database State...'
+          gosu postgres pg_basebackup -h pg_primary -D /var/lib/postgresql/data -U replicator -v -Fp -P -R -X stream
+        fi
+
+        echo 'Starting Standby Engine safely...'
+        exec gosu postgres docker-entrypoint.sh postgres
+    volumes:
+      - pg_standby_data:/var/lib/postgresql/data
+    networks:
+      - db_network
+    ports:
+      - "54330:5432"
+    depends_on:
+      - postgres_primary
+
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: pgbouncer_pool
+    environment:
+      - LISTEN_PORT=6432
+      - AUTH_TYPE=scram-sha-256
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=1000
+      - DEFAULT_POOL_SIZE=20
+      - ADMIN_USERS=db_user
+    volumes:
+      - ./userlist.txt:/etc/pgbouncer/userlist.txt:ro
+      - ./pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+    networks:
+      - db_network
+    ports:
+      - "6432:6432"
+    depends_on:
+      - postgres_primary
+      - postgres_standby
+
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: pg_exporter
+    environment:
+      - DATA_SOURCE_NAME=postgresql://db_user:your_secure_password@pg_primary:5432/my_app_db?sslmode=disable
+    networks:
+      - db_network
+    depends_on:
+      - postgres_primary
+
+  pgbouncer_exporter:
+    image: prometheuscommunity/pgbouncer-exporter:latest
+    container_name: bouncer_exporter
+    environment:
+      # Targets the internal virtual pgbouncer admin database
+      - PGBOUNCER_EXPORTER_CONNECTION_STRING=postgresql://db_user:your_secure_password@pgbouncer:6432/pgbouncer?sslmode=disable
+    networks:
+      - db_network
+    depends_on:
+      - pgbouncer
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: monitoring_prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - db_network
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: monitoring_grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin_production_pass
+    networks:
+      - db_network
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+
+volumes:
+  pg_primary_data:
+  pg_standby_data:
+
+networks:
+  db_network:
+    driver: bridge
+
