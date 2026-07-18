@@ -1,6 +1,6 @@
 services:
   postgres_primary:
-    image: postgres:17
+    image: postgres:18
     container_name: pg_primary
     environment:
       POSTGRES_USER: db_user
@@ -20,7 +20,7 @@ services:
       - "54320:5432"
 
   postgres_standby:
-    image: postgres:17
+    image: postgres:18
     container_name: pg_standby
     environment:
       PGPASSWORD: replica_secure_password
